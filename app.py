@@ -1,11 +1,10 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from collections import OrderedDict, defaultdict, deque
 import hashlib
 import time
 import numpy as np
-from sentence_transformers import SentenceTransformer
 import asyncio
 import json
 
@@ -21,7 +20,25 @@ TTL_SECONDS = 86400
 MAX_CACHE_SIZE = 1500
 SIMILARITY_THRESHOLD = 0.95
 
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+# =====================================================
+# LIGHTWEIGHT EMBEDDING (NO TORCH)
+# =====================================================
+
+def simple_embedding(text: str):
+    words = text.lower().split()
+    vector = [abs(hash(word)) % 1000 for word in words[:20]]
+    return np.array(vector if vector else [0])
+
+def cosine_similarity(a, b):
+    min_len = min(len(a), len(b))
+    if min_len == 0:
+        return 0.0
+    a = a[:min_len]
+    b = b[:min_len]
+    denom = (np.linalg.norm(a) * np.linalg.norm(b))
+    if denom == 0:
+        return 0.0
+    return np.dot(a, b) / denom
 
 # =====================================================
 # ================== Q1 CACHING =======================
@@ -41,12 +58,9 @@ class CacheRequest(BaseModel):
 def md5_hash(text):
     return hashlib.md5(text.encode()).hexdigest()
 
-def cosine_similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
 def clean_expired():
     now = time.time()
-    keys = [k for k,v in cache.items() if now - v["timestamp"] > TTL_SECONDS]
+    keys = [k for k, v in cache.items() if now - v["timestamp"] > TTL_SECONDS]
     for k in keys:
         del cache[k]
 
@@ -78,7 +92,8 @@ def caching(req: CacheRequest):
         }
 
     # Semantic match
-    query_embedding = embedding_model.encode(req.query)
+    query_embedding = simple_embedding(req.query)
+
     for k, v in cache.items():
         if cosine_similarity(query_embedding, v["embedding"]) > SIMILARITY_THRESHOLD:
             analytics["cacheHits"] += 1
@@ -140,28 +155,23 @@ def get_analytics():
 rate_limits = defaultdict(lambda: deque())
 
 MAX_PER_MIN = 42
-BURST = 11
+BURST_LIMIT = 11
 
 class SecurityRequest(BaseModel):
     userId: str
     input: str
     category: str
 
-MAX_PER_MIN = 42
-BURST_LIMIT = 11
-
 @app.post("/security")
 async def security(req: SecurityRequest, request: Request):
     user = req.userId or request.client.host
     now = time.time()
-
     window = rate_limits[user]
 
-    # Remove old requests (older than 60s)
+    # Remove old entries
     while window and now - window[0] > 60:
         window.popleft()
 
-    # Block if more than 42 in last 60 seconds
     if len(window) >= MAX_PER_MIN:
         return JSONResponse(
             status_code=429,
@@ -174,9 +184,8 @@ async def security(req: SecurityRequest, request: Request):
             headers={"Retry-After": "60"}
         )
 
-    # Burst protection (11 rapid requests within 2 seconds)
-    recent_requests = [t for t in window if now - t < 2]
-    if len(recent_requests) >= BURST_LIMIT:
+    recent = [t for t in window if now - t < 2]
+    if len(recent) >= BURST_LIMIT:
         return JSONResponse(
             status_code=429,
             content={
