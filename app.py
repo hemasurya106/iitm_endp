@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from collections import OrderedDict, defaultdict, deque
 import hashlib
 import time
@@ -10,6 +10,11 @@ import asyncio
 import json
 
 app = FastAPI()
+
+# =====================================================
+# CORS (Fixes OPTIONS 405 issue)
+# =====================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,6 +22,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Explicit OPTIONS handlers (bulletproof fix)
+
+@app.options("/")
+async def options_root():
+    return {}
+
+@app.options("/security")
+async def options_security():
+    return {}
+
+@app.options("/stream")
+async def options_stream():
+    return {}
 
 # =====================================================
 # GLOBAL CONFIG
@@ -29,7 +48,7 @@ MAX_CACHE_SIZE = 1500
 SIMILARITY_THRESHOLD = 0.95
 
 # =====================================================
-# LIGHTWEIGHT EMBEDDING (NO TORCH)
+# LIGHTWEIGHT EMBEDDING
 # =====================================================
 
 def simple_embedding(text: str):
@@ -49,7 +68,7 @@ def cosine_similarity(a, b):
     return np.dot(a, b) / denom
 
 # =====================================================
-# ================== Q1 CACHING =======================
+# Q1 — CACHING
 # =====================================================
 
 cache = OrderedDict()
@@ -157,7 +176,7 @@ def get_analytics():
     }
 
 # =====================================================
-# ================== Q2 RATE LIMIT ====================
+# Q2 — RATE LIMITING
 # =====================================================
 
 rate_limits = defaultdict(lambda: deque())
@@ -176,7 +195,6 @@ async def security(req: SecurityRequest, request: Request):
     now = time.time()
     window = rate_limits[user]
 
-    # Remove old entries
     while window and now - window[0] > 60:
         window.popleft()
 
