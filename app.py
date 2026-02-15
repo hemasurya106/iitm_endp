@@ -194,12 +194,18 @@ class SecurityRequest(BaseModel):
     category: str
 
 @app.post("/security")
-async def security(req: SecurityRequest, request: Request):
-    user = request.client.host  # Force IP-based limiting
+async def security(request: Request):
+    try:
+        body = await request.json()
+    except:
+        body = {}
 
+    user_input = body.get("input", "")
+    user = request.client.host  # IP-based limiting only
     now = time.time()
     window = rate_limits[user]
 
+    # Clean old entries (60 sec window)
     while window and now - window[0] > 60:
         window.popleft()
 
@@ -216,7 +222,7 @@ async def security(req: SecurityRequest, request: Request):
             headers={"Retry-After": "60"}
         )
 
-    # Burst limit (within 10 seconds)
+    # Burst limit (11 within 10 seconds)
     recent = [t for t in window if now - t < 10]
     if len(recent) >= BURST_LIMIT:
         return JSONResponse(
@@ -235,7 +241,7 @@ async def security(req: SecurityRequest, request: Request):
     return {
         "blocked": False,
         "reason": "Input passed all security checks",
-        "sanitizedOutput": req.input.strip(),
+        "sanitizedOutput": user_input.strip() if isinstance(user_input, str) else "",
         "confidence": 0.95
     }
 
