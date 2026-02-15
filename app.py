@@ -195,15 +195,15 @@ class SecurityRequest(BaseModel):
 
 @app.post("/security")
 async def security(req: SecurityRequest, request: Request):
-    user = req.userId or request.client.host
+    user = request.client.host  # Force IP-based limiting
+
     now = time.time()
     window = rate_limits[user]
 
-    # Remove old entries older than 60 seconds
     while window and now - window[0] > 60:
         window.popleft()
 
-    # Absolute per-minute limit
+    # Per minute limit
     if len(window) >= MAX_PER_MIN:
         return JSONResponse(
             status_code=429,
@@ -216,7 +216,7 @@ async def security(req: SecurityRequest, request: Request):
             headers={"Retry-After": "60"}
         )
 
-    # Burst detection (more than 11 requests within last 10 seconds)
+    # Burst limit (within 10 seconds)
     recent = [t for t in window if now - t < 10]
     if len(recent) >= BURST_LIMIT:
         return JSONResponse(
