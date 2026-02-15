@@ -188,14 +188,13 @@ from collections import defaultdict
 import time
 from fastapi.responses import JSONResponse
 
-MAX_PER_MIN = 42
-BURST_LIMIT = 11
+RATE_PER_MINUTE = 42
+BURST_CAPACITY = 11
+REFILL_RATE = RATE_PER_MINUTE / 60  # tokens per second
 
 rate_store = defaultdict(lambda: {
-    "minute_count": 0,
-    "minute_reset": time.time() + 60,
-    "burst_count": 0,
-    "burst_reset": time.time() + 1
+    "tokens": BURST_CAPACITY,
+    "last_refill": time.time()
 })
 
 
@@ -216,46 +215,27 @@ async def security(request: Request):
 
     user = body.get("userId") or request.client.host
     now = time.time()
-    record = rate_store[user]
+    bucket = rate_store[user]
 
-    # Reset minute window
-    if now > record["minute_reset"]:
-        record["minute_count"] = 0
-        record["minute_reset"] = now + 60
+    # Refill tokens gradually
+    elapsed = now - bucket["last_refill"]
+    refill = elapsed * REFILL_RATE
+    bucket["tokens"] = min(BURST_CAPACITY, bucket["tokens"] + refill)
+    bucket["last_refill"] = now
 
-    # Reset burst window (1 second window)
-    if now > record["burst_reset"]:
-        record["burst_count"] = 0
-        record["burst_reset"] = now + 1
-
-    record["minute_count"] += 1
-    record["burst_count"] += 1
-
-    # Burst limit check
-    if record["burst_count"] > BURST_LIMIT:
+    if bucket["tokens"] < 1:
         return JSONResponse(
             status_code=429,
             content={
                 "blocked": True,
-                "reason": "Burst limit exceeded (max 11 requests instantly)",
+                "reason": "Rate limit exceeded",
                 "sanitizedOutput": None,
-                "confidence": 0.98
+                "confidence": 0.99
             },
             headers={"Retry-After": "1"}
         )
 
-    # Minute limit check
-    if record["minute_count"] > MAX_PER_MIN:
-        return JSONResponse(
-            status_code=429,
-            content={
-                "blocked": True,
-                "reason": "Rate limit exceeded (42 requests per minute)",
-                "sanitizedOutput": None,
-                "confidence": 0.99
-            },
-            headers={"Retry-After": "60"}
-        )
+    bucket["tokens"] -= 1
 
     return {
         "blocked": False,
