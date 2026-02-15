@@ -184,13 +184,18 @@ def get_analytics():
 # =====================================================
 # Q2 — RATE LIMITING
 # =====================================================
-RATE_LIMIT = 42          # 42 per minute
-BURST_CAPACITY = 11      # allow burst of 11
-REFILL_RATE = RATE_LIMIT / 60  # tokens per second
+from collections import defaultdict
+import time
+from fastapi.responses import JSONResponse
 
-rate_limit_store = defaultdict(lambda: {
-    "tokens": RATE_LIMIT,
-    "last_refill": time.time()
+MAX_PER_MIN = 42
+BURST_LIMIT = 11
+
+rate_store = defaultdict(lambda: {
+    "minute_count": 0,
+    "minute_reset": time.time() + 60,
+    "burst_count": 0,
+    "burst_reset": time.time() + 1
 })
 
 
@@ -209,21 +214,38 @@ async def security(request: Request):
             }
         )
 
-    # Track per userId if provided, else fallback to IP
-    user_id = body.get("userId") or request.client.host
+    user = body.get("userId") or request.client.host
     now = time.time()
+    record = rate_store[user]
 
-    bucket = rate_limit_store[user_id]
+    # Reset minute window
+    if now > record["minute_reset"]:
+        record["minute_count"] = 0
+        record["minute_reset"] = now + 60
 
-    # Refill tokens
-    elapsed = now - bucket["last_refill"]
-    refill_tokens = elapsed * REFILL_RATE
-    bucket["tokens"] = min(RATE_LIMIT, bucket["tokens"] + refill_tokens)
-    bucket["last_refill"] = now
+    # Reset burst window (1 second window)
+    if now > record["burst_reset"]:
+        record["burst_count"] = 0
+        record["burst_reset"] = now + 1
 
-    if bucket["tokens"] < 1:
-        retry_after = int((1 - bucket["tokens"]) / REFILL_RATE)
+    record["minute_count"] += 1
+    record["burst_count"] += 1
 
+    # Burst limit check
+    if record["burst_count"] > BURST_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "blocked": True,
+                "reason": "Burst limit exceeded (max 11 requests instantly)",
+                "sanitizedOutput": None,
+                "confidence": 0.98
+            },
+            headers={"Retry-After": "1"}
+        )
+
+    # Minute limit check
+    if record["minute_count"] > MAX_PER_MIN:
         return JSONResponse(
             status_code=429,
             content={
@@ -232,19 +254,16 @@ async def security(request: Request):
                 "sanitizedOutput": None,
                 "confidence": 0.99
             },
-            headers={"Retry-After": str(max(retry_after, 1))}
+            headers={"Retry-After": "60"}
         )
 
-    # Consume token
-    bucket["tokens"] -= 1
-
-    # Successful request
     return {
         "blocked": False,
         "reason": "Input passed all security checks",
         "sanitizedOutput": body.get("input", ""),
         "confidence": 0.95
     }
+
 # =====================================================
 # ================== Q3 STREAMING =====================
 # =====================================================
