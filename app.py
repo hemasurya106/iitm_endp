@@ -111,10 +111,11 @@ def caching(req: CacheRequest):
     if key in cache:
         analytics["cacheHits"] += 1
         cache.move_to_end(key)
+        latency_ms = max(1, int((time.time() - start) * 1000))
         return {
             "answer": cache[key]["response"],
             "cached": True,
-            "latency": max(1, int((time.time() - start) * 1000)),
+            "latency": latency_ms,
             "cacheKey": key
         }
 
@@ -125,10 +126,11 @@ def caching(req: CacheRequest):
         if cosine_similarity(query_embedding, v["embedding"]) > SIMILARITY_THRESHOLD:
             analytics["cacheHits"] += 1
             cache.move_to_end(k)
+            latency_ms = max(1, int((time.time() - start) * 1000))
             return {
                 "answer": v["response"],
                 "cached": True,
-                "latency": int((time.time() - start) * 1000),
+                "latency": latency_ms,
                 "cacheKey": k
             }
 
@@ -144,10 +146,12 @@ def caching(req: CacheRequest):
 
     enforce_lru()
 
+    latency_ms = max(1, int((time.time() - start) * 1000))
+
     return {
         "answer": response,
         "cached": False,
-        "latency": int((time.time() - start) * 1000),
+        "latency": latency_ms,
         "cacheKey": key
     }
 
