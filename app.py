@@ -199,9 +199,11 @@ async def security(req: SecurityRequest, request: Request):
     now = time.time()
     window = rate_limits[user]
 
+    # Remove old entries older than 60 seconds
     while window and now - window[0] > 60:
         window.popleft()
 
+    # Absolute per-minute limit
     if len(window) >= MAX_PER_MIN:
         return JSONResponse(
             status_code=429,
@@ -214,7 +216,8 @@ async def security(req: SecurityRequest, request: Request):
             headers={"Retry-After": "60"}
         )
 
-    recent = [t for t in window if now - t < 2]
+    # Burst detection (more than 11 requests within last 10 seconds)
+    recent = [t for t in window if now - t < 10]
     if len(recent) >= BURST_LIMIT:
         return JSONResponse(
             status_code=429,
@@ -224,7 +227,7 @@ async def security(req: SecurityRequest, request: Request):
                 "sanitizedOutput": None,
                 "confidence": 0.98
             },
-            headers={"Retry-After": "5"}
+            headers={"Retry-After": "10"}
         )
 
     window.append(now)
