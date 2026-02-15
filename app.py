@@ -114,7 +114,7 @@ def caching(req: CacheRequest):
         return {
             "answer": cache[key]["response"],
             "cached": True,
-            "latency": int((time.time() - start) * 1000),
+            "latency": max(1, int((time.time() - start) * 1000)),
             "cacheKey": key
         }
 
