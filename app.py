@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 from collections import OrderedDict, defaultdict, deque
 import hashlib
 import time
@@ -9,6 +10,13 @@ import asyncio
 import json
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # =====================================================
 # GLOBAL CONFIG
