@@ -8,7 +8,9 @@ import time
 import numpy as np
 import asyncio
 import json
-
+from collections import defaultdict
+import time
+from fastapi.responses import JSONResponse
 app = FastAPI()
 
 # =====================================================
@@ -182,68 +184,67 @@ def get_analytics():
 # =====================================================
 # Q2 — RATE LIMITING
 # =====================================================
+RATE_LIMIT = 42          # 42 per minute
+BURST_CAPACITY = 11      # allow burst of 11
+REFILL_RATE = RATE_LIMIT / 60  # tokens per second
 
-rate_limits = defaultdict(lambda: {
-    "count": 0,
-    "reset_time": 0
+rate_limit_store = defaultdict(lambda: {
+    "tokens": RATE_LIMIT,
+    "last_refill": time.time()
 })
 
-MAX_PER_MIN = 42
-BURST_LIMIT = 11
 
 @app.post("/security")
 async def security(request: Request):
     try:
         body = await request.json()
-    except:
-        body = {}
-
-    user = request.client.host
-    now = time.time()
-
-    record = rate_limits[user]
-
-    # Reset window every 60 seconds
-    if now > record["reset_time"]:
-        record["count"] = 0
-        record["reset_time"] = now + 60
-
-    record["count"] += 1
-
-    # Burst block (first 22 rapid test)
-    if record["count"] > BURST_LIMIT:
+    except Exception:
         return JSONResponse(
-            status_code=429,
+            status_code=400,
             content={
                 "blocked": True,
-                "reason": "Burst limit exceeded",
+                "reason": "Invalid JSON payload",
                 "sanitizedOutput": None,
-                "confidence": 0.98
-            },
-            headers={"Retry-After": "10"}
+                "confidence": 0.90
+            }
         )
 
-    # Per minute block
-    if record["count"] > MAX_PER_MIN:
+    # Track per userId if provided, else fallback to IP
+    user_id = body.get("userId") or request.client.host
+    now = time.time()
+
+    bucket = rate_limit_store[user_id]
+
+    # Refill tokens
+    elapsed = now - bucket["last_refill"]
+    refill_tokens = elapsed * REFILL_RATE
+    bucket["tokens"] = min(RATE_LIMIT, bucket["tokens"] + refill_tokens)
+    bucket["last_refill"] = now
+
+    if bucket["tokens"] < 1:
+        retry_after = int((1 - bucket["tokens"]) / REFILL_RATE)
+
         return JSONResponse(
             status_code=429,
             content={
                 "blocked": True,
-                "reason": "Rate limit exceeded (42/min)",
+                "reason": "Rate limit exceeded (42 requests per minute)",
                 "sanitizedOutput": None,
                 "confidence": 0.99
             },
-            headers={"Retry-After": "60"}
+            headers={"Retry-After": str(max(retry_after, 1))}
         )
 
+    # Consume token
+    bucket["tokens"] -= 1
+
+    # Successful request
     return {
         "blocked": False,
         "reason": "Input passed all security checks",
         "sanitizedOutput": body.get("input", ""),
         "confidence": 0.95
     }
-
-
 # =====================================================
 # ================== Q3 STREAMING =====================
 # =====================================================
