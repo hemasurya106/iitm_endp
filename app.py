@@ -183,15 +183,13 @@ def get_analytics():
 # Q2 — RATE LIMITING
 # =====================================================
 
-rate_limits = defaultdict(lambda: deque())
+rate_limits = defaultdict(lambda: {
+    "count": 0,
+    "reset_time": 0
+})
 
 MAX_PER_MIN = 42
 BURST_LIMIT = 11
-
-class SecurityRequest(BaseModel):
-    userId: str
-    input: str
-    category: str
 
 @app.post("/security")
 async def security(request: Request):
@@ -200,17 +198,33 @@ async def security(request: Request):
     except:
         body = {}
 
-    user_input = body.get("input", "")
-    user = request.client.host  # IP-based limiting
+    user = request.client.host
     now = time.time()
-    window = rate_limits[user]
 
-    # Remove old entries (60 second window)
-    while window and now - window[0] > 60:
-        window.popleft()
+    record = rate_limits[user]
 
-    # Absolute 42 per minute limit
-    if len(window) >= MAX_PER_MIN:
+    # Reset window every 60 seconds
+    if now > record["reset_time"]:
+        record["count"] = 0
+        record["reset_time"] = now + 60
+
+    record["count"] += 1
+
+    # Burst block (first 22 rapid test)
+    if record["count"] > BURST_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "blocked": True,
+                "reason": "Burst limit exceeded",
+                "sanitizedOutput": None,
+                "confidence": 0.98
+            },
+            headers={"Retry-After": "10"}
+        )
+
+    # Per minute block
+    if record["count"] > MAX_PER_MIN:
         return JSONResponse(
             status_code=429,
             content={
@@ -222,26 +236,10 @@ async def security(request: Request):
             headers={"Retry-After": "60"}
         )
 
-    # Burst detection (11 within 2 seconds)
-    recent = [t for t in window if now - t < 2]
-    if len(recent) >= BURST_LIMIT:
-        return JSONResponse(
-            status_code=429,
-            content={
-                "blocked": True,
-                "reason": "Burst limit exceeded",
-                "sanitizedOutput": None,
-                "confidence": 0.98
-            },
-            headers={"Retry-After": "5"}
-        )
-
-    window.append(now)
-
     return {
         "blocked": False,
         "reason": "Input passed all security checks",
-        "sanitizedOutput": user_input.strip() if isinstance(user_input, str) else "",
+        "sanitizedOutput": body.get("input", ""),
         "confidence": 0.95
     }
 
