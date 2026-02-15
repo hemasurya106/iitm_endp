@@ -201,15 +201,15 @@ async def security(request: Request):
         body = {}
 
     user_input = body.get("input", "")
-    user = request.client.host  # IP-based limiting only
+    user = request.client.host  # IP-based limiting
     now = time.time()
     window = rate_limits[user]
 
-    # Clean old entries (60 sec window)
+    # Remove old entries (60 second window)
     while window and now - window[0] > 60:
         window.popleft()
 
-    # Per minute limit
+    # Absolute 42 per minute limit
     if len(window) >= MAX_PER_MIN:
         return JSONResponse(
             status_code=429,
@@ -222,8 +222,8 @@ async def security(request: Request):
             headers={"Retry-After": "60"}
         )
 
-    # Burst limit (11 within 10 seconds)
-    recent = [t for t in window if now - t < 10]
+    # Burst detection (11 within 2 seconds)
+    recent = [t for t in window if now - t < 2]
     if len(recent) >= BURST_LIMIT:
         return JSONResponse(
             status_code=429,
@@ -233,7 +233,7 @@ async def security(request: Request):
                 "sanitizedOutput": None,
                 "confidence": 0.98
             },
-            headers={"Retry-After": "10"}
+            headers={"Retry-After": "5"}
         )
 
     window.append(now)
